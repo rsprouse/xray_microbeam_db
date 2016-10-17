@@ -11,7 +11,7 @@ import pandas as pd
 
 from bokeh.io import curdoc
 from bokeh.layouts import row, column, widgetbox, gridplot
-from bokeh.models import ColumnDataSource, CustomJS, Span, BoxAnnotation
+from bokeh.models import ColumnDataSource, Span, BoxAnnotation, Range1d
 from bokeh.models.tools import \
      CrosshairTool, BoxZoomTool, BoxSelectTool, HoverTool, \
      PanTool, ResetTool, SaveTool, TapTool, WheelZoomTool
@@ -41,6 +41,7 @@ def get_filenames():
 
 def load_file(attrname, old, wav):
     global au, orig_au, rate, orig_rate, timepts, df, stream
+    global xrng, yrng
     (orig_rate, au) = scipy.io.wavfile.read(wav)
     orig_au = au.copy()
     if stream is None:
@@ -71,13 +72,75 @@ def load_file(attrname, old, wav):
                 'T3x', 'T3y', 'T4x', 'T4y', 'MIx', 'MIy', 'MMx', 'MMy'
             ]
         )
-    df['sec'] = df['sec'] / 10e5
+    # Convert to seconds
+    df['sec'] = df['sec'] / 1e6
     df = df.set_index(['sec'])
+    # Convert to mm
+    df[[
+        'ULx', 'ULy', 'LLx', 'LLy', 'T1x', 'T1y', 'T2x', 'T2y',
+        'T3x', 'T3y', 'T4x', 'T4y', 'MIx', 'MIy', 'MMx', 'MMy'
+    ]] = df[[
+        'ULx', 'ULy', 'LLx', 'LLy', 'T1x', 'T1y', 'T2x', 'T2y',
+        'T3x', 'T3y', 'T4x', 'T4y', 'MIx', 'MIy', 'MMx', 'MMy'
+    ]] * 1e-3
+    # Find global x/y max/min in this recording to set axis limits.
+    # Exclude bad values (1000000 in data file; 1000 mm in scaled dataframe).
+    cmpdf = df[df < badval]
+    xmax = np.max(
+        np.max(
+            cmpdf[['ULx','LLx','T1x', 'T2x', 'T3x', 'T4x', 'MIx', 'MMx']]
+        )
+    )
+    xmin = np.min(
+        np.min(
+            cmpdf[['ULx','LLx','T1x', 'T2x', 'T3x', 'T4x', 'MIx', 'MMx']]
+        )
+    )
+    ymax = np.max(
+        np.max(
+            cmpdf[['ULy','LLy','T1y', 'T2y', 'T3y', 'T4y', 'MIy', 'MMy']]
+        )
+    )
+    ymin = np.min(
+        np.min(
+            cmpdf[['ULy','LLy','T1y', 'T2y', 'T3y', 'T4y', 'MIy', 'MMy']]
+        )
+    )
+    # TODO: this works but produces SettingWithCopyWarning
+    # will not have to use this when bokeh can handle NaN in plots
+#    xdf = df[[
+#        'ULx', 'LLx', 'T1x', 'T2x',
+#        'T3x', 'T4x', 'MIx', 'MMx'
+#    ]]
+#    xmax = np.max(np.max(xdf[xdf < badval]))
+#    xdf[xdf == badval] = xrng[1]
+#    ydf = df[[
+#        'ULy', 'LLy', 'T1y', 'T2y',
+#        'T3y', 'T4y', 'MIy', 'MMy'
+#    ]]
+#    ymax = np.max(np.max(ydf[ydf < badval]))
+#    ydf[ydf == badval] = yrng[1]
+#    df = pd.concat([xdf, ydf], axis=1)
+
     paldf = pd.read_csv(palfile, sep='\s+', header=None, names=['x', 'y'])
+    paldf = paldf * 1e-3
     palsource.data = {'x': paldf['x'], 'y': paldf['y']}
     phadf = pd.read_csv(phafile, sep='\s+', header=None, names=['x', 'y'])
+    phadf = phadf * 1e-3
     phasource.data = {'x': phadf['x'], 'y': phadf['y']}
 
+    xmin = np.min([xmin, np.min(paldf['x']), np.min(phadf['x'])])
+    xmax = np.max([xmax, np.max(paldf['x']), np.max(phadf['x'])])
+    ymin = np.min([ymin, np.min(paldf['y']), np.min(phadf['y'])])
+    ymax = np.max([ymax, np.max(paldf['y']), np.max(phadf['y'])])
+    xsz = xmax - xmin
+    ysz = ymax - ymin
+    print('xmin: ', xmin, ' xmax: ', xmax, ' xsz: ', xsz)
+    print('ymin: ', ymin, ' ymax: ', ymax, ' ysz: ', ysz)
+    xrng = [xmin - (xsz * 0.05), xmax + (xsz * 0.05)]
+    yrng = [ymin - (ysz * 0.05), ymax + (ysz * 0.05)]
+    print(xrng, yrng)
+    set_limits()
     
 def make_plot():
     '''Make the plot figures.'''
@@ -98,9 +161,9 @@ def make_plot():
     ts.append(figure(
             width=500, height=300,
             title='Static trace',
-#            x_range=(-100000,20000), y_range=(-30000,30000),
+            x_range=(-100000,25000), y_range=(-37650,37650),
             tools=tools[1], webgl=True,
-            tags=['static_fig']
+            tags=['xray', 'static_fig']
         )
     )
     ts[1].circle('x', 'y', source=tngsource, size=3, color=tngcolor, tags=['update_xray'])
@@ -111,9 +174,9 @@ def make_plot():
     ts.append(figure(
             width=500, height=300,
             title='Trajectories',
-#            x_range=(-100000,20000), y_range=(-30000,30000),
+            x_range=(-100000,25000), y_range=(-37650,37650),
             tools=tools[2], webgl=True,
-            tags=['trajectory_fig']
+            tags=['xray', 'trajectory_fig']
         )
     )
     ts[2].line('T1x', 'T1y', source=timesource, color=tngcolor, tags=['update_xray'])
@@ -124,8 +187,11 @@ def make_plot():
     ts[2].line('LLx', 'LLy', source=timesource, color=othcolor, tags=['update_xray'])
     ts[2].line('MIx', 'MIy', source=timesource, color=othcolor, tags=['update_xray'])
     ts[2].line('MMx', 'MMy', source=timesource, color=othcolor, tags=['update_xray'])
-    ts[2].circle('x', 'y', source=lasttngtimesource, color=tngcolor, tags=['update_xray'])
-    ts[2].circle('x', 'y', source=lastothtimesource, color=othcolor, tags=['update_xray'])
+    ts[2].circle('x', 'y', source=tngsource, color=tngcolor, tags=['update_xray'])
+    ts[2].circle('x', 'y', source=othsource, color=othcolor, tags=['update_xray'])
+    ts[2].line('x', 'y', source=tngsource, color='lightgray', tags=['update_xray'])
+    #ts[2].circle('x', 'y', source=lasttngtimesource, color=tngcolor, tags=['update_xray'])
+    #ts[2].circle('x', 'y', source=lastothtimesource, color=othcolor, tags=['update_xray'])
     ts[2].line('x', 'y', source=palsource, color='black')
     ts[2].line('x', 'y', source=phasource, color='black')
     gp = gridplot([[ts[0]], [ts[1], ts[2]]])
@@ -143,6 +209,7 @@ def update_data_0d(sec):
         'x': [row.ULx, row.LLx, row.MIx, row.MMx],
         'y': [row.ULy, row.LLy, row.MIy, row.MMy]
     }
+    #set_limits()
 
 def update_data_1d(t1, t2):
     '''Update the trajectories in selected range.'''
@@ -159,6 +226,18 @@ def update_data_1d(t1, t2):
         'x': [lastrow.ULx, lastrow.LLx, lastrow.MIx, lastrow.MMx],
         'y': [lastrow.ULy, lastrow.LLy, lastrow.MIy, lastrow.MMy]
     }
+    #set_limits()
+
+def set_limits():
+    '''Set axis limits.'''
+    print('***', xrng, yrng)
+    for renderer in gp.select(dict(tags=['xray'])):
+        # TODO: this is a workaround until we can set x_range, y_range directly
+        # See https://github.com/bokeh/bokeh/issues/4014
+        renderer.x_range.start = xrng[0]
+        renderer.x_range.end = xrng[1]
+        renderer.y_range.start = yrng[0]
+        renderer.y_range.end = yrng[1]
 
 def selection_change(attr, old, new):
     sys.stderr.write("*****selection_change***********\n")
@@ -193,6 +272,10 @@ tngcolor = 'DarkRed'
 othcolor = 'Indigo'
 #msgdiv = Div(text='', width=400, height=50)
 
+# bad values in .txy files are 1000000 (scaled to 1000)
+# TODO:
+# when bokeh can handle plots with NaN, use that to filter instead of badval
+badval = 1000
 
 step = None
 rate = orig_rate = None
@@ -200,6 +283,8 @@ df = None
 stream = None
 au = orig_au = timepts = []
 pelx = pely = othx = othy = []
+xrng = []
+yrng = []
 width = 1000
 height = 200
 cutoff = 50
